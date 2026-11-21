@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+.DS_Store
+
+# Never commit real PerYourHealth data: no portal captures, HAR files or raw
+# answers. Fixtures are synthetic (tests/fixtures/README.md).
+/captures
+*.har
+*.raw.json
+*.raw.html
+*.ndjson

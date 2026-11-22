@@ -57,6 +57,30 @@ fn is_dummy_number(n: &str) -> bool {
 /// Vendors' own sending domains, named in docs/api.md.
 const PUBLIC_EMAIL_DOMAINS: &[&str] = &["example.com", "peryourhealth.com", "optum.com"];
 
+/// `line` with each run of 40 or more hex digits blanked: a SHA-1 or
+/// SHA-256 digest (a pinned checksum), whose digits read as an account
+/// number. Nothing personal is that shape.
+fn without_digests(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.len() < 40 {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in line.chars() {
+        if c.is_ascii_hexdigit() {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
 /// `line` with each `YYYY-MM-DD HH:MM:SS` (or `T` between) blanked: the
 /// portal's own time stamps, which read as a phone number once the
 /// separators are gone.
@@ -98,7 +122,7 @@ fn without_datetimes(line: &str) -> String {
 /// The personal-data shapes on one line, each as `kind value`.
 fn scan_line(line: &str) -> Vec<String> {
     let mut findings = Vec::new();
-    let line = without_datetimes(line);
+    let line = without_datetimes(&without_digests(line));
     let line = line.as_str();
     let phoneish = line.replace(['(', ')', '-', '.', ' '], "");
     for n in digits_run(line, 7)
@@ -197,6 +221,8 @@ fn the_scanner_flags_real_shapes_and_passes_dummies() {
         "statement 7342918",
         "call 772-404-1234 at 2025-08-02 12:00:00",
         "the status was 200, then 1234 Oak St",
+        "sha 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb account 9234567812",
+        "bad1234567",
     ] {
         assert!(!scan_line(real).is_empty(), "missed: {real}");
     }
@@ -209,6 +235,7 @@ fn the_scanner_flags_real_shapes_and_passes_dummies() {
         "2025-03-14",
         "\"created\": \"2025-08-02 12:00:00\"",
         "one 401 and 302), drives every command",
+        "GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
     ] {
         assert!(
             scan_line(dummy).is_empty(),

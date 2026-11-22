@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/piekstra/peryourhealth-cli"
+repository = "https://github.com/own-your-health/peryourhealth-cli"
 authors = ["piekstra"]
 publish = false
 
@@ -27,7 +27,7 @@ pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.33.
 pk-cli-browser = { git = "https://github.com/piekstra/cli-common", tag = "v0.33.4" }
 pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.33.4" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-pk-med-records = { git = "https://github.com/piekstra/medical-common", tag = "v0.6.9" }
+pk-med-records = { git = "https://github.com/own-your-health/medical-common", tag = "v0.6.9" }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }

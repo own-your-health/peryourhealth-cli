@@ -337,6 +337,12 @@ impl Mapper {
         id_of("statement", &format!("{account}-{number}"))
     }
 
+    /// A receipt's DocumentReference id: receipts are numbered apart from
+    /// statements, so they get ids apart from them.
+    pub fn receipt_id(&self, account: &str, number: &str) -> String {
+        id_of("receipt", &format!("{account}-{number}"))
+    }
+
     /// The account, `last_updated` the time the site was read.
     pub fn account(&self, a: &Account, last_updated: &str) -> Value {
         let mut v = json!({
@@ -585,14 +591,43 @@ impl Mapper {
     /// lists. Its amount due and due date have no R4 element: a records
     /// store reads them from the file.
     pub fn statement(&self, s: &Statement, binary_id: &str, content_type: &str, size: usize, title: &str) -> Value {
+        self.document(DocType::Bill, s, binary_id, content_type, size, title)
+    }
+
+    /// A billing document's DocumentReference, typed `kind`: a statement
+    /// ([`DocType::Bill`], as [`Mapper::statement`]) or a payment receipt a
+    /// site serves as a file ([`DocType::Receipt`]), given as a [`Statement`]
+    /// with the receipt's number, date and the bills it paid. Each kind has
+    /// its own identifier system and ids.
+    pub fn document(
+        &self,
+        kind: DocType,
+        s: &Statement,
+        binary_id: &str,
+        content_type: &str,
+        size: usize,
+        title: &str,
+    ) -> Value {
+        let (id, system, category) = match kind {
+            DocType::Bill => (
+                self.statement_id(&s.account, &s.number),
+                self.system("statement"),
+                "Billing statement",
+            ),
+            DocType::Receipt => (
+                self.receipt_id(&s.account, &s.number),
+                self.system("receipt"),
+                "Payment receipt",
+            ),
+        };
         let mut v = json!({
             "resourceType": "DocumentReference",
-            "id": self.statement_id(&s.account, &s.number),
+            "id": id,
             "meta": self.meta(Some(&format!("{}T00:00:00Z", s.date))),
-            "identifier": [{ "system": self.system("statement"), "value": s.number }],
+            "identifier": [{ "system": system, "value": s.number }],
             "status": "current",
-            "type": DocType::Bill.concept(),
-            "category": [{ "text": "Billing statement" }],
+            "type": kind.concept(),
+            "category": [{ "text": category }],
             "subject": self.subject(),
             "date": format!("{}T00:00:00Z", s.date),
             "author": [self.issuer()],
@@ -961,6 +996,37 @@ mod tests {
         assert_eq!(
             DocType::Receipt.concept(),
             json!({ "coding": [{ "system": "urn:pk-med:doc-type", "code": "receipt" }], "text": "receipt" })
+        );
+        let r = Statement {
+            number: "R7".into(),
+            account: "ACCT-1".into(),
+            date: "2020-03-01".into(),
+            amount_due: None,
+            due_date: None,
+            bills: vec!["V100".into()],
+        };
+        let v = mapper().document(
+            DocType::Receipt,
+            &r,
+            "bin-r7",
+            "application/pdf",
+            10,
+            "Receipt 2020-03-01",
+        );
+        assert_eq!(v["type"]["coding"][0]["code"], "receipt");
+        assert_eq!(v["id"], "receipt-ACCT-1-R7");
+        assert_eq!(v["identifier"][0]["system"], "urn:examplecli:org-1:receipt");
+        assert_eq!(v["category"][0]["text"], "Payment receipt");
+        assert_eq!(v["context"]["related"][0]["reference"], "Account/account-ACCT-1");
+        assert_eq!(v["context"]["related"][1]["reference"], "Invoice/bill-ACCT-1-V100");
+        // A statement through the same builder is the statement.
+        let s = Statement {
+            number: "S1".into(),
+            ..r
+        };
+        assert_eq!(
+            mapper().document(DocType::Bill, &s, "b", "application/pdf", 1, "t"),
+            mapper().statement(&s, "b", "application/pdf", 1, "t")
         );
     }
 }

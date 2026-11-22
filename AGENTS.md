@@ -24,7 +24,7 @@ from [medical-common](https://github.com/own-your-health/medical-common). Every
 | `src/site.rs` | the sign-in: the browser capture and the session check (`SESSION_CHECK_URL`, `judge`) |
 | `src/client.rs` | the reads: pacing, the cookie jar, `refuse` (answers to exit codes), and `api_path`, which checks an `api` path is a read before it is sent |
 | `src/pages.rs` | what the site's HTML says: the sign-in page, a signed-in page |
-| `src/bill.rs` | the bill model (accounts, bills and their charge lines, payments, statements) and its FHIR mapping (`docs/fhir.md`) |
+| `src/bill.rs` | the bill model (accounts, bills and their charge lines, payments, statements, receipts) and its FHIR mapping (`docs/fhir.md`). The same file is in flywire-cli, peryourhealth-cli and embryooptions-cli, differing only in the CLI's name in two doc comments: a change to it is made in all three. It needs serde_json's `arbitrary_precision` (Cargo.toml) to keep money's decimal spelling; its unit test fails without it |
 | `src/portal.rs` | the signed-in commands (`Env`: where sessions are kept and which site is read; `Site`, which writes refreshed cookies back) |
 | `docs/api.md` | the site as observed, and the traps |
 

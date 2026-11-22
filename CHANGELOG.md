@@ -18,3 +18,14 @@
 - CI's `security` job runs the gitleaks CLI 8.30.1, pinned by checksum, over
   the whole history: gitleaks-action needs a paid license on an
   organization's repository.
+- The bill model (`src/bill.rs`, docs/fhir.md) follows medrec's bill
+  mapping, as flywire's does: every `Money` value is a JSON number in the
+  bill's decimal spelling (`125.00`, kept by serde_json's
+  `arbitrary_precision`); a bill without lines holds its date of service
+  in a ChargeItem of its own; `totalPriceComponent` is the bill's
+  breakdown, its billed amount the `base` `billed` component, and
+  `totalGross` equals `totalNet`, what the patient owes; a payment's
+  detail names the provider paid (`payee`), with the bill's amount when
+  it paid one bill alone, and `paymentIssuer` is dropped; statements and
+  receipts are typed in `urn:pk-med:doc-type`, and a statement's
+  `context.related` names its Account.

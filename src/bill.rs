@@ -4,21 +4,24 @@
 //! - [`Account`]: a billing account at a provider, for one patient, with the
 //!   responsible party. FHIR `Account`. R4's Account has no balance element,
 //!   so the balance a site shows is not mapped: it is the sum of the open
-//!   bills' `Invoice.totalNet`.
+//!   (`issued`) bills' `Invoice.totalNet`.
 //! - [`Bill`]: one service billed on an account (a visit, or a claim at the
 //!   provider), with its charge lines and what was paid, adjusted and is
 //!   owed. FHIR `Invoice`; each line's date of service and code is a
-//!   contained `ChargeItem` the line points at.
+//!   contained `ChargeItem` the line points at, and a bill the site shows
+//!   without lines gets one line of its own holding its date of service.
 //! - [`Payment`]: one payment the patient or responsible party made. FHIR
-//!   `PaymentReconciliation`, its `detail[]` naming the bills it paid where
-//!   the site says. Insurance payments stay on the bill's lines.
-//! - [`Statement`]: a statement PDF. FHIR `DocumentReference` (type text
-//!   `bill`) with its `Binary`.
+//!   `PaymentReconciliation`, its `detail[]` naming the provider paid and,
+//!   where the site says, the bills it paid. Insurance payments stay on the
+//!   bill's lines.
+//! - [`Statement`]: a statement PDF. FHIR `DocumentReference` typed `bill`
+//!   in [`DOC_TYPE_SYSTEM`], with its `Binary`. A receipt is typed
+//!   [`DocType::Receipt`] the same way.
 //!
-//! Money is whole cents here and a FHIR `Money` (a decimal with two places,
-//! USD) in the resources. Ids are stable across runs, derived from the
-//! site's own account, bill, payment and statement numbers, so a records
-//! store merges the same bill pulled twice.
+//! Money is whole cents here and a FHIR `Money` in the resources: a JSON
+//! number in the decimal spelling a bill prints (`125.00`), in USD. Ids are
+//! stable across runs, derived from the site's own account, bill, payment and
+//! statement numbers, so a records store merges the same bill pulled twice.
 
 use serde_json::{json, Map, Value};
 
@@ -26,6 +29,33 @@ use serde_json::{json, Map, Value};
 pub const COMPONENT_SYSTEM: &str = "urn:pk-med:bill-component";
 /// An `Invoice.identifier.type.text` naming the insurer's claim number.
 pub const INSURER_CLAIM: &str = "insurer-claim";
+/// The code system of a document's house type (`DocumentReference.type`),
+/// which a records store files by.
+pub const DOC_TYPE_SYSTEM: &str = "urn:pk-med:doc-type";
+
+/// A billing document's house type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocType {
+    /// A statement: what is owed.
+    Bill,
+    /// A payment receipt: what was paid, never an amount due.
+    Receipt,
+}
+
+impl DocType {
+    pub fn code(self) -> &'static str {
+        match self {
+            DocType::Bill => "bill",
+            DocType::Receipt => "receipt",
+        }
+    }
+
+    /// `DocumentReference.type`: the coding in [`DOC_TYPE_SYSTEM`], and the
+    /// code as text for a reader that knows no system.
+    pub fn concept(self) -> Value {
+        json!({ "coding": [{ "system": DOC_TYPE_SYSTEM, "code": self.code() }], "text": self.code() })
+    }
+}
 
 /// An amount in whole cents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -82,10 +112,17 @@ impl Cents {
         format!("{sign}{}.{:02}", (self.0 / 100).abs(), (self.0 % 100).abs())
     }
 
-    /// FHIR `Money`: the amount as a JSON number (`12.3`; cents are exact
-    /// in a double far beyond any bill), in USD.
+    /// FHIR `Money`: the amount as a JSON number spelled as [`decimal`]
+    /// writes it (`125.00`, `-12.30`), in USD. serde_json keeps the spelling
+    /// only with its `arbitrary_precision` feature, which Cargo.toml turns
+    /// on; a test pins it.
+    ///
+    /// [`decimal`]: Cents::decimal
     pub fn money(self) -> Value {
-        let number = serde_json::Number::from_f64(self.0 as f64 / 100.0).expect("finite");
+        let number: serde_json::Number = self
+            .decimal()
+            .parse()
+            .expect("a decimal with two places is a JSON number");
         json!({ "value": number, "currency": "USD" })
     }
 }
@@ -345,15 +382,42 @@ impl Mapper {
         v.insert("resourceType".into(), "Invoice".into());
         v.insert("id".into(), self.bill_id(&b.account, &b.number).into());
         v.insert("meta".into(), self.meta(Some(last_updated)));
-        let contained: Vec<Value> = b
-            .lines
+        // A bill the site shows without lines is one line of its own,
+        // dated by its service, so its date of service is a ChargeItem's as
+        // every other bill's is.
+        let own_line;
+        let lines: &[Charge] = if b.lines.is_empty() {
+            own_line = [Charge {
+                date: b.service_start.clone(),
+                code: None,
+                description: Some(b.description.clone().unwrap_or_else(|| "Services".into())),
+                quantity: None,
+                amounts: totals,
+            }];
+            &own_line
+        } else {
+            &b.lines
+        };
+        let contained: Vec<Value> = lines
             .iter()
             .enumerate()
-            .map(|(i, line)| self.charge_item(b, i, line))
+            .map(|(i, line)| {
+                let mut item = self.charge_item(b, i, line);
+                if b.lines.is_empty() {
+                    if let Some(end) = b.service_end.as_ref().filter(|e| *e != &b.service_start) {
+                        if let Some(o) = item.as_object_mut() {
+                            o.remove("occurrenceDateTime");
+                            o.insert(
+                                "occurrencePeriod".into(),
+                                json!({ "start": b.service_start, "end": end }),
+                            );
+                        }
+                    }
+                }
+                item
+            })
             .collect();
-        if !contained.is_empty() {
-            v.insert("contained".into(), contained.into());
-        }
+        v.insert("contained".into(), contained.into());
         v.insert("identifier".into(), ident.into());
         v.insert("status".into(), status.into());
         if let Some(d) = &b.description {
@@ -374,30 +438,23 @@ impl Mapper {
             "account".into(),
             json!({ "reference": format!("Account/{}", self.account_id(&b.account)) }),
         );
-        let lines: Vec<Value> = if b.lines.is_empty() {
-            // A bill the site shows without lines is one line of its own,
-            // dated by its service, so its amounts and date are carried.
-            vec![self.line_item(1, None, &totals)]
-        } else {
-            b.lines
-                .iter()
-                .enumerate()
-                .map(|(i, line)| self.line_item(i + 1, Some(format!("#charge-{}", i + 1)), &line.amounts))
-                .collect()
-        };
-        v.insert("lineItem".into(), lines.into());
-        if let Some(c) = totals.billed {
-            v.insert("totalGross".into(), c.money());
+        let items: Vec<Value> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| self.line_item(i + 1, &format!("#charge-{}", i + 1), &line.amounts))
+            .collect();
+        v.insert("lineItem".into(), items.into());
+        // The bill's own breakdown, in the lines' codes: the billed amount
+        // is here (`base` `billed`), not in `totalGross`.
+        let parts = price_components(&totals);
+        if !parts.is_empty() {
+            v.insert("totalPriceComponent".into(), parts.into());
         }
+        // R4's totals come after the price components, and a medical bill
+        // carries no tax: both are what the patient still owes.
         if let Some(c) = owes {
             v.insert("totalNet".into(), c.money());
-        }
-        let mut notes = Vec::new();
-        if b.lines.is_empty() {
-            notes.push(json!({ "text": format!("Date of service: {}", service_text(b)) }));
-        }
-        if !notes.is_empty() {
-            v.insert("note".into(), notes.into());
+            v.insert("totalGross".into(), c.money());
         }
         Value::Object(v)
     }
@@ -459,48 +516,23 @@ impl Mapper {
         Value::Object(v)
     }
 
-    fn line_item(&self, sequence: usize, charge_ref: Option<String>, a: &Amounts) -> Value {
-        let mut v = json!({ "sequence": sequence });
-        match charge_ref {
-            Some(r) => v["chargeItemReference"] = json!({ "reference": r }),
-            None => v["chargeItemCodeableConcept"] = json!({ "text": "Services" }),
-        }
-        let mut parts = Vec::new();
-        let mut part = |kind: &str, code: Option<(&str, &str)>, c: Option<Cents>| {
-            if let Some(c) = c {
-                let mut p = json!({ "type": kind, "amount": c.money() });
-                if let Some((code, display)) = code {
-                    p["code"] = json!({ "coding": [{ "system": COMPONENT_SYSTEM, "code": code, "display": display }] });
-                }
-                parts.push(p);
-            }
-        };
-        part("base", Some(("billed", "Billed charge")), a.billed);
-        part("informational", Some(("allowed", "Allowed amount")), a.allowed);
-        part(
-            "deduction",
-            Some(("insurance-payment", "Insurance payment")),
-            a.insurance_paid,
-        );
-        part("discount", Some(("insurance-adjustment", "Adjustment")), a.adjustment);
-        part(
-            "deduction",
-            Some(("patient-payment", "Patient payment")),
-            a.patient_paid,
-        );
-        part(
-            "informational",
-            Some(("patient-responsibility", "Patient owes")),
-            a.patient_owes,
-        );
+    fn line_item(&self, sequence: usize, charge_ref: &str, a: &Amounts) -> Value {
+        let mut v = json!({ "sequence": sequence, "chargeItemReference": { "reference": charge_ref } });
+        let parts = price_components(a);
         if !parts.is_empty() {
             v["priceComponent"] = parts.into();
         }
         v
     }
 
-    /// A payment as a PaymentReconciliation, dated by the payment. `bills`
-    /// maps a bill number on the payment's account to its Invoice id.
+    /// A payment as a PaymentReconciliation, dated by the payment.
+    /// `bill_known` says whether a bill number on the payment's account is
+    /// an Invoice in the same stream.
+    ///
+    /// Every `detail` names the provider paid (`payee`). A detail per bill
+    /// the payment was applied to carries its `request`, and its `amount`
+    /// when the payment names that bill alone; a payment that names no bill
+    /// in the stream has one detail, with the payee only.
     pub fn payment(&self, p: &Payment, index: usize, bill_known: impl Fn(&str) -> bool) -> Value {
         let mut v = json!({
             "resourceType": "PaymentReconciliation",
@@ -508,7 +540,6 @@ impl Mapper {
             "meta": self.meta(Some(&format!("{}T00:00:00Z", p.date))),
             "status": "active",
             "created": p.date,
-            "paymentIssuer": self.subject(),
             "requestor": self.issuer(),
             "outcome": "complete",
             "paymentDate": p.date,
@@ -521,26 +552,38 @@ impl Mapper {
         if let Some(m) = &p.method {
             v["disposition"] = format!("Paid by {m}").into();
         }
-        let details: Vec<Value> = p
+        let detail = || {
+            json!({
+                "type": { "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/payment-type", "code": "payment", "display": "Payment" }] },
+                "payee": self.issuer(),
+                "date": p.date,
+            })
+        };
+        let only = p.bills.len() == 1;
+        let mut details: Vec<Value> = p
             .bills
             .iter()
             .filter(|b| bill_known(b))
             .map(|b| {
-                json!({
-                    "type": { "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/payment-type", "code": "payment", "display": "Payment" }] },
-                    "request": { "reference": format!("Invoice/{}", self.bill_id(&p.account, b)) },
-                    "date": p.date,
-                })
+                let mut d = detail();
+                d["request"] = json!({ "reference": format!("Invoice/{}", self.bill_id(&p.account, b)) });
+                if only {
+                    d["amount"] = p.amount.money();
+                }
+                d
             })
             .collect();
-        if !details.is_empty() {
-            v["detail"] = details.into();
+        if details.is_empty() {
+            details.push(detail());
         }
+        v["detail"] = details.into();
         v
     }
 
     /// A statement's DocumentReference, naming its Binary (`binary_id`) of
-    /// `content_type` and `size` bytes, and the Invoices it lists.
+    /// `content_type` and `size` bytes, its Account and the Invoices it
+    /// lists. Its amount due and due date have no R4 element: a records
+    /// store reads them from the file.
     pub fn statement(&self, s: &Statement, binary_id: &str, content_type: &str, size: usize, title: &str) -> Value {
         let mut v = json!({
             "resourceType": "DocumentReference",
@@ -548,7 +591,7 @@ impl Mapper {
             "meta": self.meta(Some(&format!("{}T00:00:00Z", s.date))),
             "identifier": [{ "system": self.system("statement"), "value": s.number }],
             "status": "current",
-            "type": { "text": "bill" },
+            "type": DocType::Bill.concept(),
             "category": [{ "text": "Billing statement" }],
             "subject": self.subject(),
             "date": format!("{}T00:00:00Z", s.date),
@@ -562,20 +605,48 @@ impl Mapper {
                 "creation": s.date,
             } }],
         });
-        if !s.bills.is_empty() {
-            v["context"] = json!({
-                "related": s.bills.iter().map(|b| json!({ "reference": format!("Invoice/{}", self.bill_id(&s.account, b)) })).collect::<Vec<_>>(),
-            });
-        }
+        let mut related = vec![json!({ "reference": format!("Account/{}", self.account_id(&s.account)) })];
+        related.extend(
+            s.bills
+                .iter()
+                .map(|b| json!({ "reference": format!("Invoice/{}", self.bill_id(&s.account, b)) })),
+        );
+        v["context"] = json!({ "related": related });
         v
     }
 }
 
-fn service_text(b: &Bill) -> String {
-    match &b.service_end {
-        Some(end) if end != &b.service_start => format!("{} to {end}", b.service_start),
-        _ => b.service_start.clone(),
-    }
+/// The `priceComponent`s of `a`, in `COMPONENT_SYSTEM`.
+fn price_components(a: &Amounts) -> Vec<Value> {
+    let mut parts = Vec::new();
+    let mut part = |kind: &str, code: Option<(&str, &str)>, c: Option<Cents>| {
+        if let Some(c) = c {
+            let mut p = json!({ "type": kind, "amount": c.money() });
+            if let Some((code, display)) = code {
+                p["code"] = json!({ "coding": [{ "system": COMPONENT_SYSTEM, "code": code, "display": display }] });
+            }
+            parts.push(p);
+        }
+    };
+    part("base", Some(("billed", "Billed charge")), a.billed);
+    part("informational", Some(("allowed", "Allowed amount")), a.allowed);
+    part(
+        "deduction",
+        Some(("insurance-payment", "Insurance payment")),
+        a.insurance_paid,
+    );
+    part("discount", Some(("insurance-adjustment", "Adjustment")), a.adjustment);
+    part(
+        "deduction",
+        Some(("patient-payment", "Patient payment")),
+        a.patient_paid,
+    );
+    part(
+        "informational",
+        Some(("patient-responsibility", "Patient owes")),
+        a.patient_owes,
+    );
+    parts
 }
 
 #[cfg(test)]
@@ -620,8 +691,16 @@ mod tests {
         }
         assert_eq!(Cents(-1230).decimal(), "-12.30");
         assert_eq!(Cents(5).decimal(), "0.05");
-        assert_eq!(Cents(1230).money().to_string(), r#"{"value":12.3,"currency":"USD"}"#);
+        // The decimal spelling, kept as a JSON number (arbitrary_precision).
+        assert_eq!(Cents(12500).money().to_string(), r#"{"value":125.00,"currency":"USD"}"#);
+        assert_eq!(Cents(1230).money().to_string(), r#"{"value":12.30,"currency":"USD"}"#);
+        assert_eq!(Cents(-1230).money()["value"].to_string(), "-12.30");
         assert_eq!(Cents(7713).money()["value"].to_string(), "77.13");
+        assert!(Cents(12500).money()["value"].is_number());
+        // And it reads back as written.
+        let back: Value = serde_json::from_str(&Cents(12500).money().to_string()).unwrap();
+        assert_eq!(back["value"].to_string(), "125.00");
+        assert_eq!(back["value"].as_f64(), Some(125.0));
     }
 
     #[test]
@@ -716,8 +795,20 @@ mod tests {
                 ("informational", "patient-responsibility"),
             ]
         );
-        assert_eq!(v["totalGross"]["value"].to_string(), "250.0");
-        assert_eq!(v["totalNet"]["value"].to_string(), "20.0");
+        assert_eq!(v["contained"][0]["performer"][0]["actor"]["display"], "Dr. Example");
+        // No tax on a medical bill: both totals are what the patient owes.
+        assert_eq!(v["totalNet"]["value"].to_string(), "20.00");
+        assert_eq!(v["totalGross"], v["totalNet"]);
+        // The billed amount, and the rest of the bill's breakdown, are its
+        // own price components, summed from the lines here.
+        let totals = v["totalPriceComponent"].as_array().unwrap();
+        assert_eq!(totals.len(), parts.len());
+        assert_eq!(totals[0]["type"], "base");
+        assert_eq!(totals[0]["code"]["coding"][0]["system"], COMPONENT_SYSTEM);
+        assert_eq!(totals[0]["code"]["coding"][0]["code"], "billed");
+        assert_eq!(totals[0]["amount"]["value"].to_string(), "250.00");
+        assert_eq!(totals[2]["code"]["coding"][0]["code"], "insurance-payment");
+        assert_eq!(totals[2]["amount"]["value"].to_string(), "90.00");
         assert_eq!(v["date"], "2020-01-10");
         assert_eq!(v["account"]["reference"], "Account/account-ACCT-1");
         assert_eq!(v["meta"]["lastUpdated"], "2020-02-01T00:00:00Z");
@@ -735,9 +826,30 @@ mod tests {
         b.service_end = Some("2020-01-04".into());
         let v = mapper().bill(&b, "2020-02-01T00:00:00Z");
         assert_eq!(v["status"], "balanced");
-        assert!(v.get("contained").is_none());
-        assert_eq!(v["lineItem"][0]["chargeItemCodeableConcept"]["text"], "Services");
-        assert_eq!(v["note"][0]["text"], "Date of service: 2020-01-02 to 2020-01-04");
+        // Its one line is a ChargeItem holding the date of service.
+        let items = v["contained"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["occurrencePeriod"]["start"], "2020-01-02");
+        assert_eq!(items[0]["occurrencePeriod"]["end"], "2020-01-04");
+        assert!(items[0].get("occurrenceDateTime").is_none());
+        assert_eq!(items[0]["code"]["text"], "Office visit");
+        assert_eq!(v["lineItem"][0]["chargeItemReference"]["reference"], "#charge-1");
+        assert_eq!(
+            v["lineItem"][0]["priceComponent"][0]["amount"]["value"].to_string(),
+            "10.00"
+        );
+        assert_eq!(v["totalPriceComponent"][0]["code"]["coding"][0]["code"], "billed");
+        assert_eq!(v["totalPriceComponent"][0]["amount"]["value"].to_string(), "10.00");
+        assert_eq!(v["totalNet"]["value"].to_string(), "0.00");
+        assert_eq!(v["totalGross"], v["totalNet"]);
+        assert_eq!(v["date"], "2020-01-10", "the posting date, not the service");
+        assert!(v.get("note").is_none());
+        // A one-day service is a dateTime, and no description is "Services".
+        b.service_end = None;
+        b.description = None;
+        let one = mapper().bill(&b, "x");
+        assert_eq!(one["contained"][0]["occurrenceDateTime"], "2020-01-02");
+        assert_eq!(one["contained"][0]["code"]["text"], "Services");
         b.voided = true;
         assert_eq!(mapper().bill(&b, "x")["status"], "cancelled");
     }
@@ -755,9 +867,30 @@ mod tests {
         let v = mapper().payment(&p, 0, |b| b == "V100");
         assert_eq!(v["resourceType"], "PaymentReconciliation");
         assert_eq!(v["id"], "payment-T-9");
-        assert_eq!(v["paymentAmount"]["value"].to_string(), "20.0");
+        assert_eq!(v["status"], "active");
+        assert_eq!(v["paymentDate"], "2020-03-01");
+        assert_eq!(v["paymentAmount"]["value"].to_string(), "20.00");
+        assert!(v.get("paymentIssuer").is_none(), "R4 allows an Organization only");
         assert_eq!(v["detail"].as_array().unwrap().len(), 1);
         assert_eq!(v["detail"][0]["request"]["reference"], "Invoice/bill-ACCT-1-V100");
+        assert_eq!(v["detail"][0]["payee"]["display"], "Example Physicians");
+        assert!(
+            v["detail"][0].get("amount").is_none(),
+            "split over two bills, by amounts the site does not show"
+        );
+        // A payment that names one bill applied all of itself to it.
+        let one = Payment {
+            bills: vec!["V100".into()],
+            ..p.clone()
+        };
+        let v = mapper().payment(&one, 0, |_| true);
+        assert_eq!(v["detail"][0]["amount"]["value"].to_string(), "20.00");
+        // One naming no bill in the stream still names the provider paid.
+        let v = mapper().payment(&p, 0, |_| false);
+        assert_eq!(v["detail"].as_array().unwrap().len(), 1);
+        assert_eq!(v["detail"][0]["payee"]["display"], "Example Physicians");
+        assert!(v["detail"][0].get("request").is_none());
+        assert!(v["detail"][0].get("amount").is_none());
         let anonymous = Payment { number: None, ..p };
         assert_eq!(
             mapper().payment(&anonymous, 3, |_| false)["id"],
@@ -803,9 +936,31 @@ mod tests {
             1234,
             "Statement 2020-01-15",
         );
-        assert_eq!(v["type"]["text"], "bill");
+        assert_eq!(
+            v["type"],
+            json!({ "coding": [{ "system": "urn:pk-med:doc-type", "code": "bill" }], "text": "bill" })
+        );
+        assert_eq!(v["date"], "2020-01-15T00:00:00Z");
         assert_eq!(v["content"][0]["attachment"]["url"], "Binary/statement-ACCT-1-S1-pdf");
-        assert_eq!(v["context"]["related"][0]["reference"], "Invoice/bill-ACCT-1-V100");
+        assert_eq!(v["context"]["related"][0]["reference"], "Account/account-ACCT-1");
+        assert_eq!(v["context"]["related"][1]["reference"], "Invoice/bill-ACCT-1-V100");
         assert_eq!(v["meta"]["lastUpdated"], "2020-01-15T00:00:00Z");
+        let text = v.to_string();
+        assert!(
+            !text.contains("20.00") && !text.contains("2020-02-05"),
+            "no amount due or due date: {text}"
+        );
+        // A statement listing no bills still names its Account.
+        let alone = Statement { bills: Vec::new(), ..s };
+        let v = mapper().statement(&alone, "b", "application/pdf", 1, "t");
+        assert_eq!(v["context"]["related"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_receipt_is_typed_receipt() {
+        assert_eq!(
+            DocType::Receipt.concept(),
+            json!({ "coding": [{ "system": "urn:pk-med:doc-type", "code": "receipt" }], "text": "receipt" })
+        );
     }
 }

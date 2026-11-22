@@ -7,7 +7,7 @@ on [PerYourHealth](https://www.peryourhealth.com), the patient billing site
 Optum runs for many physician groups and hospitals. It signs in as you,
 reads what the site shows you, and prints it or writes it as FHIR R4 for a
 personal medical-records store (`records-stream/v1`, the `health-records/v1`
-profile of [medical-common](https://github.com/piekstra/medical-common),
+profile of [medical-common](https://github.com/own-your-health/medical-common),
 read by `medrec import --from peryourhealth`). It never pays, schedules or
 cancels a payment, changes a setting, or sends a message.
 
@@ -29,7 +29,7 @@ in (`docs/api.md`).
 ## Install
 
 ```sh
-cargo install --git https://github.com/piekstra/peryourhealth-cli --locked
+cargo install --git https://github.com/own-your-health/peryourhealth-cli --locked
 # or download a release, peryourhealth-<target>.tar.gz (macOS Apple Silicon or
 # Intel, Linux x86_64), put `peryourhealth` on your PATH; later: peryourhealth self-update
 ```

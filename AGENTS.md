@@ -10,7 +10,7 @@ medical-records system (`records-stream/v1`, `medrec import --from
 peryourhealth`). It conforms to piekstra-cli/1 and the `health-records/v1`
 profile, on the `pk-cli-*` crates from
 [cli-common](https://github.com/piekstra/cli-common) and `pk-med-records`
-from [medical-common](https://github.com/piekstra/medical-common). Every
+from [medical-common](https://github.com/own-your-health/medical-common). Every
 `pk-cli-*` stays on the cli-common tag medical-common pins.
 
 ## Layout

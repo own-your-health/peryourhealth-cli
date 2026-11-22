@@ -23,39 +23,15 @@
 //! stable across runs, derived from the site's own account, bill, payment and
 //! statement numbers, so a records store merges the same bill pulled twice.
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Map, Number, Value};
 
-/// The code system of a bill line's amounts (`Invoice.lineItem.priceComponent.code`).
-pub const COMPONENT_SYSTEM: &str = "urn:pk-med:bill-component";
+/// The profile's bill vocabulary (medical-common `DESIGN.md` §1.10): the
+/// price components with their R4 types, codes and displays, the document
+/// types, and the totals, so no CLI spells a code of its own.
+pub use pk_med_records::bill::{Component, DocType, COMPONENT_SYSTEM, DOC_TYPE_SYSTEM};
+
 /// An `Invoice.identifier.type.text` naming the insurer's claim number.
 pub const INSURER_CLAIM: &str = "insurer-claim";
-/// The code system of a document's house type (`DocumentReference.type`),
-/// which a records store files by.
-pub const DOC_TYPE_SYSTEM: &str = "urn:pk-med:doc-type";
-
-/// A billing document's house type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DocType {
-    /// A statement: what is owed.
-    Bill,
-    /// A payment receipt: what was paid, never an amount due.
-    Receipt,
-}
-
-impl DocType {
-    pub fn code(self) -> &'static str {
-        match self {
-            DocType::Bill => "bill",
-            DocType::Receipt => "receipt",
-        }
-    }
-
-    /// `DocumentReference.type`: the coding in [`DOC_TYPE_SYSTEM`], and the
-    /// code as text for a reader that knows no system.
-    pub fn concept(self) -> Value {
-        json!({ "coding": [{ "system": DOC_TYPE_SYSTEM, "code": self.code() }], "text": self.code() })
-    }
-}
 
 /// An amount in whole cents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -112,18 +88,22 @@ impl Cents {
         format!("{sign}{}.{:02}", (self.0 / 100).abs(), (self.0 % 100).abs())
     }
 
-    /// FHIR `Money`: the amount as a JSON number spelled as [`decimal`]
-    /// writes it (`125.00`, `-12.30`), in USD. serde_json keeps the spelling
-    /// only with its `arbitrary_precision` feature, which Cargo.toml turns
-    /// on; a test pins it.
+    /// The amount as a JSON number spelled as [`decimal`] writes it
+    /// (`125.00`, `-12.30`). serde_json keeps the spelling only with its
+    /// `arbitrary_precision` feature, which Cargo.toml turns on; a test pins
+    /// it.
     ///
     /// [`decimal`]: Cents::decimal
-    pub fn money(self) -> Value {
-        let number: serde_json::Number = self
-            .decimal()
+    pub fn number(self) -> Number {
+        self.decimal()
             .parse()
-            .expect("a decimal with two places is a JSON number");
-        json!({ "value": number, "currency": "USD" })
+            .expect("a decimal with two places is a JSON number")
+    }
+
+    /// FHIR `Money`: [`number`](Cents::number) in USD
+    /// (`pk_med_records::bill::money`).
+    pub fn money(self) -> Value {
+        pk_med_records::bill::money(self.number())
     }
 }
 
@@ -459,8 +439,7 @@ impl Mapper {
         // R4's totals come after the price components, and a medical bill
         // carries no tax: both are what the patient still owes.
         if let Some(c) = owes {
-            v.insert("totalNet".into(), c.money());
-            v.insert("totalGross".into(), c.money());
+            pk_med_records::bill::set_totals(&mut v, c.number());
         }
         Value::Object(v)
     }
@@ -619,6 +598,12 @@ impl Mapper {
                 self.system("receipt"),
                 "Payment receipt",
             ),
+            // A type the profile adds later: its code names the id and system.
+            other => (
+                id_of(other.code(), &format!("{}-{}", s.account, s.number)),
+                self.system(other.code()),
+                other.code(),
+            ),
         };
         let mut v = json!({
             "resourceType": "DocumentReference",
@@ -651,37 +636,21 @@ impl Mapper {
     }
 }
 
-/// The `priceComponent`s of `a`, in `COMPONENT_SYSTEM`.
+/// The `priceComponent`s of `a`, each built by [`Component::price_component`]
+/// in the order a bill lists them; an amount the site does not show is left
+/// out.
 fn price_components(a: &Amounts) -> Vec<Value> {
-    let mut parts = Vec::new();
-    let mut part = |kind: &str, code: Option<(&str, &str)>, c: Option<Cents>| {
-        if let Some(c) = c {
-            let mut p = json!({ "type": kind, "amount": c.money() });
-            if let Some((code, display)) = code {
-                p["code"] = json!({ "coding": [{ "system": COMPONENT_SYSTEM, "code": code, "display": display }] });
-            }
-            parts.push(p);
-        }
-    };
-    part("base", Some(("billed", "Billed charge")), a.billed);
-    part("informational", Some(("allowed", "Allowed amount")), a.allowed);
-    part(
-        "deduction",
-        Some(("insurance-payment", "Insurance payment")),
-        a.insurance_paid,
-    );
-    part("discount", Some(("insurance-adjustment", "Adjustment")), a.adjustment);
-    part(
-        "deduction",
-        Some(("patient-payment", "Patient payment")),
-        a.patient_paid,
-    );
-    part(
-        "informational",
-        Some(("patient-responsibility", "Patient owes")),
-        a.patient_owes,
-    );
-    parts
+    [
+        (Component::Billed, a.billed),
+        (Component::Allowed, a.allowed),
+        (Component::InsurancePayment, a.insurance_paid),
+        (Component::InsuranceAdjustment, a.adjustment),
+        (Component::PatientPayment, a.patient_paid),
+        (Component::PatientResponsibility, a.patient_owes),
+    ]
+    .into_iter()
+    .filter_map(|(component, amount)| amount.map(|c| component.price_component(c.number())))
+    .collect()
 }
 
 #[cfg(test)]
@@ -844,6 +813,29 @@ mod tests {
         assert_eq!(totals[0]["amount"]["value"].to_string(), "250.00");
         assert_eq!(totals[2]["code"]["coding"][0]["code"], "insurance-payment");
         assert_eq!(totals[2]["amount"]["value"].to_string(), "90.00");
+        // The displays are the profile's (pk_med_records::bill).
+        let displays: Vec<&str> = parts
+            .iter()
+            .map(|p| p["code"]["coding"][0]["display"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            displays,
+            [
+                "Billed charge",
+                "Allowed amount",
+                "Insurance payment",
+                "Insurance adjustment",
+                "Patient payment",
+                "Patient responsibility",
+            ]
+        );
+        // A store reads billed and owed back with the profile's readers.
+        let billed = Component::Billed.amount_in(&v["totalPriceComponent"]).unwrap();
+        assert_eq!(billed.to_string(), "250.00");
+        let owes = Component::PatientResponsibility
+            .amount_in(&v["totalPriceComponent"])
+            .unwrap();
+        assert_eq!(Some(owes), v["totalNet"]["value"].as_number());
         assert_eq!(v["date"], "2020-01-10");
         assert_eq!(v["account"]["reference"], "Account/account-ACCT-1");
         assert_eq!(v["meta"]["lastUpdated"], "2020-02-01T00:00:00Z");
@@ -974,6 +966,11 @@ mod tests {
         assert_eq!(
             v["type"],
             json!({ "coding": [{ "system": "urn:pk-med:doc-type", "code": "bill" }], "text": "bill" })
+        );
+        assert_eq!(
+            DocType::of(&v["type"]),
+            Some(DocType::Bill),
+            "a store reads the type back"
         );
         assert_eq!(v["date"], "2020-01-15T00:00:00Z");
         assert_eq!(v["content"][0]["attachment"]["url"], "Binary/statement-ACCT-1-S1-pdf");

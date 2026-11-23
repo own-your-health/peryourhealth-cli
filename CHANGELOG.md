@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A page the site does not have (HTTP 404) is exit 4, not found, as the
+  family's exit codes say; it was exit 5.
+
 - medical-common v0.6.11 and cli-common v0.33.5: the bill's code systems,
   price components, document types, `Money` and totals come from
   `pk_med_records::bill` (DESIGN §1.10) instead of the CLI's own copy. Two

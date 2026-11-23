@@ -80,7 +80,7 @@ before storing it.
 `client::Client` sends one `GET` at a time, at least `client::PACE` apart,
 follows no redirect, and maps answers to exit codes: a 401, a redirect or
 the sign-in page is 3 (`auth login --browser --profile <NAME> --overwrite`);
-a 403 page, 429 and 5xx are 5. A `Set-Cookie` updates the jar, written back
+a 404 is 4; a 403 page, 429, 5xx and any other status are 5. A `Set-Cookie` updates the jar, written back
 once the command has read what it needed, unless a newer sign-in replaced
 the stored session meanwhile (`portal::Site::finish`). A failed write-back
 is a warning.

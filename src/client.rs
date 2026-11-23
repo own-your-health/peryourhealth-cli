@@ -12,8 +12,8 @@
 //!   of the signed-in pages, checked by [`api_path`] before one is sent.
 //! - [`refuse`] turns what is no page into an error: a 401, a redirect (the
 //!   site sends a signed-out session to its sign-in page) or the sign-in page
-//!   itself is a refused session (exit 3); a 403 page, a 429, a 5xx are
-//!   exit 5.
+//!   itself is a refused session (exit 3); a 404 is exit 4; a 403 page, a
+//!   429, a 5xx and any other status are exit 5.
 //! - A `Set-Cookie` on an answer updates the client's jar; the caller writes
 //!   the updated session back once the command has read what it needed
 //!   ([`Client::updated_cookie_header`]).
@@ -470,6 +470,7 @@ pub fn refuse(a: &Answer, profile: &ProfileName) -> Result<(), CliError> {
             "PerYourHealth refused {what} as a bad request (HTTP 400); the site may have changed"
         ))
         .because(Reason::BadRequest)),
+        404 => Err(CliError::NotFound(format!("PerYourHealth has no {what} (HTTP 404)"))),
         _ => Err(CliError::Upstream(format!(
             "PerYourHealth answered {what} with HTTP {status}"
         ))),
@@ -538,6 +539,8 @@ mod tests {
             (429, "text/html", 5),
             (503, "text/html", 5),
             (400, "text/html", 5),
+            (404, "text/html", 4),
+            (410, "text/html", 5),
         ] {
             let e = refuse(&answer(status, mime, ""), &adult1()).err().unwrap();
             assert_eq!(e.exit_code(), exit, "{status}: {e}");

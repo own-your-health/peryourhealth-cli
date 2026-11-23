@@ -155,6 +155,15 @@ fn the_api_returns_the_answer_whole_with_the_sessions_headers() {
 }
 
 #[test]
+fn a_page_the_site_does_not_have_is_exit_4() {
+    let server = serve(site_routes(), None);
+    let env = env(&server, "not-found");
+    let site = Site::open(&env, &adult1()).unwrap();
+    let e = site.api("/Full/Nothing").err().unwrap();
+    assert_eq!(e.exit_code(), 4, "{e}");
+}
+
+#[test]
 fn a_signed_out_session_is_exit_3() {
     let server = serve(site_routes(), None);
     let env = env(&server, "signed-out");

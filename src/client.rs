@@ -34,6 +34,8 @@ use crate::session::Session;
 pub const BASE: &str = "https://www.peryourhealth.com";
 /// Points the reads at a test's loopback server instead of [`BASE`]
 /// ([`base`]).
+/// Required, and only a loopback origin, while a test\'s keychain service
+/// is set ([`base_from`]).
 pub const BASE_URL_ENV: &str = "PERYOURHEALTH_BASE_URL";
 /// The least time between one answer and the next request.
 pub const PACE: Duration = Duration::from_millis(750);
@@ -46,7 +48,7 @@ const MAX_BODY: u64 = 32 * 1024 * 1024;
 pub const SERVICES: &str = "/Full/Services";
 
 /// The origin this process reads: [`BASE`], unless [`BASE_URL_ENV`] names a
-/// test's server.
+/// test's server, which it must under a test's keychain service.
 pub fn base() -> Result<String, CliError> {
     base_from(
         std::env::var(BASE_URL_ENV).ok().as_deref(),

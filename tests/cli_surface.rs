@@ -370,6 +370,8 @@ fn the_base_url_override_is_for_loopback_tests_only() {
 /// Under the test keychain service a command that would send a request
 /// needs `PERYOURHEALTH_BASE_URL`: without it, it is refused before any
 /// request, so a test that forgets its server never reaches the real site.
+/// `api` and the two sign-ins are every command that sends one until the
+/// readers are built; a reader added later belongs in `cases`.
 /// `PERYOURHEALTH_CHROME` names no browser, so `auth login --browser` could not
 /// open one even if the refusal came too late.
 #[test]

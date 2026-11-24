@@ -17,7 +17,9 @@ Report a vulnerability privately through GitHub's "Report a vulnerability"
   `[::1]`, `PERYOURHEALTH_KEYCHAIN_SERVICE` names a test service
   (`piekstra.peryourhealth.<suffix>`) and `XDG_CONFIG_HOME` is set away from
   `~/.config`, so a session the owner stored is never sent anywhere but
-  PerYourHealth. `peryourhealth api` is held to the same: a `GET` of a path
+  PerYourHealth. While `PERYOURHEALTH_KEYCHAIN_SERVICE` is set, `PERYOURHEALTH_BASE_URL` is
+  required: without a loopback base, every command that would send a request
+  exits 2 before sending anything. `peryourhealth api` is held to the same: a `GET` of a path
   under `/Full/`, refused before anything is sent when it names a payment, a
   sign-in or sign-out, a setting or a message.
 - A cookie the site changes is written back to the profile's session once

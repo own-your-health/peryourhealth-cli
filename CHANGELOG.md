@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- While `PERYOURHEALTH_KEYCHAIN_SERVICE` names a test's keychain service, a command
+  that would send a request without a loopback `PERYOURHEALTH_BASE_URL` is exit 2
+  before sending it, so a test run never reaches www.peryourhealth.com.
 - A page the site does not have (HTTP 404) is exit 4, not found, as the
   family's exit codes say; it was exit 5.
 

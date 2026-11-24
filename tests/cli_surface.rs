@@ -60,9 +60,16 @@ fn bare() -> Command {
     cmd
 }
 
+/// A loopback origin no test listens on. Under the test keychain service a
+/// command that would send a request needs `PERYOURHEALTH_BASE_URL`; with this
+/// one, a test that finds no session still reaches its own refusal, and a
+/// request that went out anyway would be refused by this machine.
+const NO_SERVER: &str = "http://127.0.0.1:9";
+
 fn peryourhealth() -> Command {
     let mut cmd = bare();
-    cmd.env("XDG_CONFIG_HOME", config_with(&["adult1"]));
+    cmd.env("XDG_CONFIG_HOME", config_with(&["adult1"]))
+        .env("PERYOURHEALTH_BASE_URL", NO_SERVER);
     cmd
 }
 
@@ -358,4 +365,37 @@ fn the_base_url_override_is_for_loopback_tests_only() {
         .args(["api", "GET", "/Full/Services", "--profile", "adult1"])
         .assert()
         .code(3);
+}
+
+/// Under the test keychain service a command that would send a request
+/// needs `PERYOURHEALTH_BASE_URL`: without it, it is refused before any
+/// request, so a test that forgets its server never reaches the real site.
+/// `PERYOURHEALTH_CHROME` names no browser, so `auth login --browser` could not
+/// open one even if the refusal came too late.
+#[test]
+fn a_test_run_without_a_base_url_sends_nothing() {
+    let cases: &[&[&str]] = &[
+        &["api", "GET", "/Full/Services", "--profile", "adult1"],
+        &[
+            "auth",
+            "login",
+            "--stdin",
+            "--user-agent",
+            "Mozilla/5.0",
+            "--profile",
+            "adult1",
+        ],
+        &["auth", "login", "--browser", "--profile", "adult1"],
+    ];
+    for &args in cases {
+        peryourhealth()
+            .env_remove("PERYOURHEALTH_BASE_URL")
+            .env("PERYOURHEALTH_CHROME", "/nonexistent/chrome")
+            .args(args)
+            .write_stdin("a=b")
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("PERYOURHEALTH_BASE_URL"))
+            .stderr(predicate::str::contains("PERYOURHEALTH_KEYCHAIN_SERVICE is set"));
+    }
 }

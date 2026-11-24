@@ -34,7 +34,8 @@ use crate::session::Session;
 pub const BASE: &str = "https://www.peryourhealth.com";
 /// Points the reads at a test's loopback server instead of [`BASE`]
 /// ([`base`]).
-/// Required, and only a loopback origin, while a test\'s keychain service
+///
+/// Required, and only a loopback origin, while a test's keychain service
 /// is set ([`base_from`]).
 pub const BASE_URL_ENV: &str = "PERYOURHEALTH_BASE_URL";
 /// The least time between one answer and the next request.

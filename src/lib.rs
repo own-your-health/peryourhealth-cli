@@ -1,5 +1,5 @@
 //! `peryourhealth`: a patient's medical bills from PerYourHealth, Optum's
-//! patient billing site, for the household medical-records system
+//! patient billing site, for a personal medical-records store
 //! (health-records/v1, documents/v1). Read-only.
 
 pub mod app;

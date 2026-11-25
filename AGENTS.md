@@ -39,11 +39,11 @@ These are not negotiable.
   every tracked file for the shapes personal data takes.
 - Records and their contents are never sent to an outside service: no
   health-data aggregator, cloud OCR or other company's API. A Claude session
-  is not one of these (the owner's decision, 2026-11-17). A session may
-  read, print and summarize the owner's real bills when the work needs it:
-  debugging a real export, mapping the site with real answers, checking a
-  pull. Real data stays out of tracked files, commits, pull requests and
-  issues. A raw capture is deleted from `/tmp` once it has served.
+  is not one of these (decided 2026-11-17). A session may read, print and
+  summarize real bills when the work needs it: debugging a real export,
+  mapping the site with real answers, checking a pull. Real data stays out
+  of tracked files, commits, pull requests and issues. A raw capture is
+  deleted from `/tmp` once it has served.
 - No FHIR or SMART libraries, no aggregators. The FHIR here is mapped by
   hand in `src/bill.rs`; general-purpose crates are fine.
 - Read-only. Nothing writes to PerYourHealth: every request is a `GET` of a

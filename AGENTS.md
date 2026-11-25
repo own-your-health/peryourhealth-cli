@@ -5,8 +5,8 @@ PerYourHealth (www.peryourhealth.com), the patient billing site of Optum's
 revenue-cycle service: each billing account's balances, the services billed
 by date with charges, insurance payments, adjustments and what the patient
 owes, payments made, and statement PDFs. It reads the site's signed-in
-pages, signed in per profile, and emits FHIR for the household's
-medical-records system (`records-stream/v1`, `medrec import --from
+pages, signed in per profile, and emits FHIR for a personal
+medical-records store (`records-stream/v1`, `medrec import --from
 peryourhealth`). It conforms to piekstra-cli/1 and the `health-records/v1`
 profile, on the `pk-cli-*` crates from
 [cli-common](https://github.com/piekstra/cli-common) and `pk-med-records`
@@ -30,19 +30,19 @@ from [medical-common](https://github.com/own-your-health/medical-common). Every
 
 ## Medical data rules
 
-These come from the household's plan and are not negotiable.
+These are not negotiable.
 
 - The repository carries no personal data, in code, fixtures, docs, commits,
   pull requests or issues: no account numbers, PerYourHealth IDs, statement
-  or transaction numbers, names, providers the household uses, amounts or
-  dates of service. Fixtures are synthetic; `tests/no_personal_data.rs`
-  scans every tracked file for the shapes personal data takes.
+  or transaction numbers, names, a real person's providers, amounts or dates
+  of service. Fixtures are synthetic; `tests/no_personal_data.rs` scans
+  every tracked file for the shapes personal data takes.
 - Records and their contents are never sent to an outside service: no
   health-data aggregator, cloud OCR or other company's API. A Claude session
-  is not one of these (the household's decision, 2026-11-17). A session may
-  read, print and summarize the household's real bills when the work needs
-  it: debugging a real export, mapping the site with real answers, checking
-  a pull. Real data stays out of tracked files, commits, pull requests and
+  is not one of these (the owner's decision, 2026-11-17). A session may
+  read, print and summarize the owner's real bills when the work needs it:
+  debugging a real export, mapping the site with real answers, checking a
+  pull. Real data stays out of tracked files, commits, pull requests and
   issues. A raw capture is deleted from `/tmp` once it has served.
 - No FHIR or SMART libraries, no aggregators. The FHIR here is mapped by
   hand in `src/bill.rs`; general-purpose crates are fine.
